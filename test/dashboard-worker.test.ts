@@ -537,7 +537,155 @@ test("dashboard status reads the exact-review handoff model from the durable que
   assert.equal(typeof status.lanes.review.next_attempt_at, "string");
   assert.equal(status.pressure.status, "idle");
   assert.equal(status.pressure.reason, "capacity_available");
+  assert.equal(status.pressure_history.length, 1);
+  assert.match(status.pressure_history[0].observed_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(status.pressure_history[0].pending, 1);
+  assert.equal(status.pressure_history[0].dispatching, 0);
+  assert.equal(status.pressure_history[0].leased, 0);
   assert.equal(await exactReviewQueueStatusSnapshot({}), null);
+});
+
+test("exact-review pressure history replaces a five-minute bucket and stays bounded", async () => {
+  const originalNow = Date.now;
+  let now = Date.parse("2026-07-14T10:00:12.000Z");
+  Date.now = () => now;
+  try {
+    const queue = new ExactReviewQueue({ storage: new MemoryDurableStorage() }, {});
+    await queue.fetch(buildExactReviewQueueRequest("pressure-first", 601, "opened"));
+
+    now += 60_000;
+    await queue.fetch(buildExactReviewQueueRequest("pressure-second", 602, "opened"));
+    let stats = (await (await queue.fetch(new Request("https://queue.test/stats"))).json()) as {
+      pressure_history: Array<{ observed_at: string; pending: number }>;
+    };
+    assert.equal(stats.pressure_history.length, 1);
+    assert.equal(stats.pressure_history[0].pending, 2);
+
+    now += 5 * 60_000;
+    await queue.fetch(buildExactReviewQueueRequest("pressure-third", 603, "opened"));
+    stats = (await (await queue.fetch(new Request("https://queue.test/stats"))).json()) as {
+      pressure_history: Array<{ observed_at: string; pending: number }>;
+    };
+    assert.equal(stats.pressure_history.length, 2);
+
+    now += 3 * 60 * 60_000 + 5 * 60_000;
+    await queue.fetch(buildExactReviewQueueRequest("pressure-prune", 604, "opened"));
+    stats = (await (await queue.fetch(new Request("https://queue.test/stats"))).json()) as {
+      pressure_history: Array<{ observed_at: string; pending: number }>;
+    };
+    assert.equal(stats.pressure_history.length, 1);
+    assert.equal(stats.pressure_history[0].pending, 4);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("exact-review queue keeps its core mutation available when pressure history fails", async () => {
+  const storage = new MemoryDurableStorage();
+  const queue = new ExactReviewQueue({ storage }, {});
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    await queue.fetch(buildExactReviewQueueRequest("pressure-write-success", 605, "opened"));
+    storage.failNextPut("exact-review-queue-pressure-history:v1");
+    const response = await queue.fetch(
+      buildExactReviewQueueRequest("pressure-write-failure", 606, "opened"),
+    );
+    assert.equal(response.status, 202);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  const status = await exactReviewQueueStatusSnapshot({
+    EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue),
+  });
+  assert.equal(status?.pending, 2);
+  assert.equal(status?.pressure_history.at(-1)?.pending, 2);
+  assert.equal(warnings.length, 1);
+  assert.match(String(warnings[0][0]), /pressure history write failed/);
+});
+
+test("dashboard status excludes retry-delayed exact reviews from dispatchable backlog", async () => {
+  const storage = new MemoryDurableStorage();
+  const queue = new ExactReviewQueue({ storage }, {});
+  await queue.fetch(buildExactReviewQueueRequest("delayed-status", 598, "opened"));
+  const state = (await storage.get("exact-review-queue")) as {
+    items: Record<string, { nextAttemptAt: number }>;
+  };
+  state.items["openclaw/gogcli#598"].nextAttemptAt = Date.now() + 60_000;
+  await storage.put("exact-review-queue", state);
+
+  const status = await exactReviewQueueStatusSnapshot({
+    EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue),
+  });
+
+  assert.ok(status);
+  assert.equal(status.pending, 1);
+  assert.equal(status.ready_pending, 0);
+  assert.equal(status.admissible_pending, 0);
+  assert.equal(status.pressure.reason, "no_ready_backlog");
+});
+
+test("dashboard status excludes ready reviews blocked by a target exact-review cap", async () => {
+  const storage = new MemoryDurableStorage();
+  const queue = new ExactReviewQueue({ storage }, { EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1" });
+  await queue.fetch(
+    buildExactReviewQueueRequest("target-cap-status", 599, "opened", "issue", "openclaw/openclaw"),
+  );
+  const state = (await storage.get("exact-review-queue")) as {
+    items: Record<string, ReturnType<typeof leasedExactReviewQueueItem>>;
+  };
+  state.items["openclaw/openclaw#600"] = leasedExactReviewQueueItem(600, "run-600");
+  await storage.put("exact-review-queue", state);
+
+  const status = await exactReviewQueueStatusSnapshot({
+    EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue),
+  });
+
+  assert.ok(status);
+  assert.equal(status.pending, 1);
+  assert.equal(status.ready_pending, 1);
+  assert.equal(status.admissible_pending, 0);
+  assert.equal(status.pressure.reason, "no_admissible_backlog");
+});
+
+test("dashboard status reports saturated exact-review pressure at full capacity", async () => {
+  const storage = new MemoryDurableStorage();
+  const queue = new ExactReviewQueue(
+    { storage },
+    {
+      EXACT_REVIEW_QUEUE_MAX_CONCURRENT: "1",
+      EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1",
+    },
+  );
+  await queue.fetch(
+    buildExactReviewQueueRequest("pressure-status", 601, "opened", "issue", "openclaw/gogcli"),
+  );
+  const state = (await storage.get("exact-review-queue")) as {
+    dispatcher?: { state: "active"; checkedAt: number; workflowState: string };
+    items: Record<string, ReturnType<typeof leasedExactReviewQueueItem>>;
+  };
+  state.dispatcher = { state: "active", checkedAt: Date.now(), workflowState: "active" };
+  state.items["openclaw/openclaw#602"] = leasedExactReviewQueueItem(602, "run-602");
+  await storage.put("exact-review-queue", state);
+
+  const status = await exactReviewQueueStatusSnapshot({
+    EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue),
+  });
+
+  assert.ok(status);
+  assert.equal(status.ready_pending, 1);
+  assert.equal(status.admissible_pending, 1);
+  assert.deepEqual(status.pressure, {
+    status: "saturated",
+    reason: "capacity_full_with_backlog",
+    capacity: 1,
+    active: 1,
+    pending: 1,
+    ready_pending: 1,
+    admissible_pending: 1,
+  });
 });
 
 test("triage routing groups classify impact labels without forcing one primary group", () => {
@@ -632,6 +780,10 @@ test("OpenClaw Bay is an unlisted, hardened demo route", async () => {
   assert.match(body, /more in the tide buffer/);
   assert.match(body, /lane-nudge/);
   assert.match(body, /id="overall-average"/);
+  assert.match(body, /id="pressure-panel"/);
+  assert.match(body, /Review handoff pressure · last 3 hours/);
+  assert.match(body, /function updatePressureTrend/);
+  assert.match(body, /pressure_history/);
   assert.doesNotMatch(body, /function laneTimingHtml/);
   assert.doesNotMatch(body, /lane-average/);
   assert.doesNotMatch(body, /AVG WAIT|AVG TIME|AVG RUN/);

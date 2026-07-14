@@ -116,6 +116,12 @@ type ExactReviewQueueState = {
     retryAt?: number;
   };
 };
+type ExactReviewQueuePressurePoint = {
+  observed_at: string;
+  pending: number;
+  dispatching: number;
+  leased: number;
+};
 type LegacyExactReviewQueueState = ExactReviewQueueState & {
   deliveries?: Record<string, number>;
 };
@@ -197,6 +203,11 @@ const EXACT_REVIEW_QUEUE_LEGACY_RECEIPT_SHIFT_MS = 2 * 24 * 60 * 60 * 1000;
 const EXACT_REVIEW_QUEUE_ROLLBACK_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const EXACT_REVIEW_QUEUE_LEGACY_GENERATION_PREFIX = "__clawsweeper_sql_generation:";
 const EXACT_REVIEW_QUEUE_STATE_KEY = "exact-review-queue";
+const EXACT_REVIEW_QUEUE_PRESSURE_HISTORY_KEY = "exact-review-queue-pressure-history:v1";
+const EXACT_REVIEW_QUEUE_PRESSURE_BUCKET_MS = 5 * 60_000;
+const EXACT_REVIEW_QUEUE_PRESSURE_WINDOW_MS = 3 * 60 * 60_000;
+const EXACT_REVIEW_QUEUE_PRESSURE_POINT_LIMIT =
+  EXACT_REVIEW_QUEUE_PRESSURE_WINDOW_MS / EXACT_REVIEW_QUEUE_PRESSURE_BUCKET_MS + 1;
 const EXACT_REVIEW_QUEUE_META_TABLE = "exact_review_queue_meta";
 const EXACT_REVIEW_QUEUE_ITEM_TABLE = "exact_review_queue_items";
 const EXACT_REVIEW_QUEUE_DELIVERY_TABLE = "exact_review_queue_deliveries";
@@ -645,7 +656,7 @@ export class ExactReviewQueue {
           ) {
             state.shedSinceReset = exactReviewShedSinceReset(state) + 1;
             this.writeStateSync(state);
-            return { shed: true as const };
+            return { shed: true as const, state };
           }
           state.items[key] = {
             key,
@@ -664,6 +675,7 @@ export class ExactReviewQueue {
       if (accepted.deduped) {
         return json({ ok: true, deduped: true, item_key: exactReviewItemKey(decision) }, 202);
       }
+      await this.recordPressureHistory(accepted.state, now);
       if (accepted.shed) {
         return json({ ok: true, shed: true, reason: "backpressure" }, 202);
       }
@@ -1018,9 +1030,13 @@ export class ExactReviewQueue {
         );
         if (changed) this.writeStateSync(current);
         else this.syncLegacyCompatibilitySync(current);
-        return { state: current, completedTotal: this.publicationCompletedTotalSync() };
+        return {
+          state: current,
+          changed,
+          completedTotal: this.publicationCompletedTotalSync(),
+        };
       });
-      const { state, completedTotal } = snapshot;
+      const { state, changed, completedTotal } = snapshot;
       await this.scheduleNext(state, now);
       const stats = exactReviewQueueStats(
         state,
@@ -1033,12 +1049,14 @@ export class ExactReviewQueue {
         exactReviewPublicationDispatchLeaseMs(this.env),
         exactReviewHeartbeatGraceMs(this.env),
       );
+      if (changed) await this.recordPressureHistory(state, now);
       return json({
         ...stats,
         lanes: {
           ...stats.lanes,
           publication: { ...stats.lanes.publication, completed_total: completedTotal },
         },
+        pressure_history: await this.readPressureHistory(now),
         delivery_receipts: this.deliveryReceiptCountSync(),
         storage_schema_version: EXACT_REVIEW_QUEUE_STORAGE_SCHEMA_VERSION,
         legacy_rollback_available:
@@ -1572,12 +1590,17 @@ export class ExactReviewQueue {
     return state;
   }
 
-  private writeState(state: ExactReviewQueueState, completedPublications = 0) {
+  private async writeState(
+    state: ExactReviewQueueState,
+    completedPublications = 0,
+    observedAt = Date.now(),
+  ) {
     this.storage.transactionSync(() => {
       this.writeStateSync(state);
       if (completedPublications > 0)
         this.incrementPublicationCompletedTotalSync(completedPublications);
     });
+    await this.recordPressureHistory(state, observedAt);
   }
 
   private publicationCompletedTotalSync() {
@@ -1599,6 +1622,33 @@ export class ExactReviewQueue {
         WHERE singleton_id = 1`,
       count,
     );
+  private async recordPressureHistory(state: ExactReviewQueueState, observedAt: number) {
+    try {
+      const current = exactReviewQueuePressureHistory(
+        await this.storage.get(EXACT_REVIEW_QUEUE_PRESSURE_HISTORY_KEY),
+        observedAt,
+      );
+      const point = exactReviewQueuePressurePoint(state, observedAt);
+      const next = exactReviewQueuePressureHistory(
+        [...current.filter((entry) => entry.observed_at !== point.observed_at), point],
+        observedAt,
+      );
+      await this.storage.put(EXACT_REVIEW_QUEUE_PRESSURE_HISTORY_KEY, next);
+    } catch (error) {
+      console.warn("exact-review queue pressure history write failed", error);
+    }
+  }
+
+  private async readPressureHistory(now: number) {
+    try {
+      return exactReviewQueuePressureHistory(
+        await this.storage.get(EXACT_REVIEW_QUEUE_PRESSURE_HISTORY_KEY),
+        now,
+      );
+    } catch (error) {
+      console.warn("exact-review queue pressure history read failed", error);
+      return [];
+    }
   }
 
   private writeStateSync(state: ExactReviewQueueState) {
@@ -3562,6 +3612,48 @@ function exactReviewQueueLaneStats(
       oldestPendingAt === null ? null : Math.max(0, Math.floor((now - oldestPendingAt) / 1_000)),
     next_attempt_at: nextAttemptAt === null ? null : new Date(nextAttemptAt).toISOString(),
   };
+}
+
+function exactReviewQueuePressurePoint(state: ExactReviewQueueState, observedAt: number) {
+  const bucketAt =
+    Math.floor(observedAt / EXACT_REVIEW_QUEUE_PRESSURE_BUCKET_MS) *
+    EXACT_REVIEW_QUEUE_PRESSURE_BUCKET_MS;
+  let pending = 0;
+  let dispatching = 0;
+  let leased = 0;
+  for (const item of Object.values(state.items)) {
+    if (item.state === "pending") pending += 1;
+    else if (item.state === "dispatching") dispatching += 1;
+    else if (item.state === "leased") leased += 1;
+  }
+  return {
+    observed_at: new Date(bucketAt).toISOString(),
+    pending,
+    dispatching,
+    leased,
+  } satisfies ExactReviewQueuePressurePoint;
+}
+
+function exactReviewQueuePressureHistory(value: unknown, now = Date.now()) {
+  const cutoff = now - EXACT_REVIEW_QUEUE_PRESSURE_WINDOW_MS;
+  const byTimestamp = new Map<number, ExactReviewQueuePressurePoint>();
+  for (const point of Array.isArray(value) ? value : []) {
+    const candidate = objectValue(point);
+    const observedAt = Date.parse(String(candidate.observed_at || ""));
+    if (!Number.isFinite(observedAt) || observedAt < cutoff || observedAt > now) continue;
+    const pending = Math.max(0, Math.floor(Number(candidate.pending) || 0));
+    const dispatching = Math.max(0, Math.floor(Number(candidate.dispatching) || 0));
+    const leased = Math.max(0, Math.floor(Number(candidate.leased) || 0));
+    byTimestamp.set(observedAt, {
+      observed_at: new Date(observedAt).toISOString(),
+      pending,
+      dispatching,
+      leased,
+    });
+  }
+  return [...byTimestamp.values()]
+    .sort((left, right) => Date.parse(left.observed_at) - Date.parse(right.observed_at))
+    .slice(-EXACT_REVIEW_QUEUE_PRESSURE_POINT_LIMIT);
 }
 
 export function exactReviewQueueNextWakeAt(
