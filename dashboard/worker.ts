@@ -5,7 +5,10 @@ import {
 import { isExactReviewCloseGuardLabel } from "../src/repair/exact-review-guard-labels.ts";
 import { stableJson } from "../src/stable-json.ts";
 import { bayHtml } from "./bay-page.ts";
-import { summarizeExactReviewHandoff } from "./exact-review-health.ts";
+import {
+  summarizeExactReviewHandoff,
+  summarizeExactReviewPressure,
+} from "./exact-review-health.ts";
 import {
   HEALTH_HISTORY_RETENTION_DAYS,
   exactReviewHistorySample,
@@ -3475,9 +3478,31 @@ function exactReviewQueueStats(
       publicationCapacity,
     ),
   };
-  return {
+  const readyPending = items.filter(
+    (item) => item.state === "pending" && item.nextAttemptAt <= now,
+  ).length;
+  const admissiblePending = exactReviewQueueAdmittedItems(
+    state,
+    now,
+    Number.MAX_SAFE_INTEGER,
+    targetCapacity,
+    publicationCapacity,
+  ).length;
+  const pressure = summarizeExactReviewPressure({
     pending: handoffHealth.phases.pending.count,
-    shed_since_reset: exactReviewShedSinceReset(state),
+    readyPending,
+    admissiblePending,
+    dispatching: handoffHealth.phases.dispatching.count,
+    leased: handoffHealth.phases.leased.count,
+    capacity,
+    dispatcherState: state.dispatcher?.state,
+    handoffStatus: handoffHealth.status,
+  });
+  return {
+    generated_at: handoffHealth.observed_at,
+    pending: handoffHealth.phases.pending.count,
+    ready_pending: readyPending,
+    admissible_pending: admissiblePending,
     dispatching: handoffHealth.phases.dispatching.count,
     leased: handoffHealth.phases.leased.count,
     oldest_pending_at: handoffHealth.phases.pending.oldest_at,
@@ -3488,6 +3513,7 @@ function exactReviewQueueStats(
     oldest_leased_age_seconds: handoffHealth.phases.leased.oldest_age_seconds,
     handoff_health: handoffHealth,
     lanes,
+    pressure,
     next_wake_at: nextWakeAt === null ? null : new Date(nextWakeAt).toISOString(),
     dispatcher: {
       state: state.dispatcher?.state || "unknown",
@@ -10675,6 +10701,8 @@ function renderExactReviewHandoff(queue) {
     return;
   }
   const status = ["idle", "healthy", "degraded", "stalled"].includes(health.status) ? health.status : "unknown";
+  const pressure = queue?.pressure;
+  const pressureStatus = ["idle", "congested", "saturated", "unknown"].includes(pressure?.status) ? pressure.status : "unknown";
   const labels = {
     pending: ["Pending", "waiting for admission"],
     dispatching: ["Dispatching", "waiting for run claim"],
@@ -10688,8 +10716,9 @@ function renderExactReviewHandoff(queue) {
     return '<div class="handoff-phase"><span>' + esc(labels[phase][0]) + '</span><strong>' + fmt.format(summary.count || 0) + '</strong><small>' + esc(labels[phase][1] + " · " + age) + '</small></div>';
   }).join("");
   const slots = fmt.format(health.available_slots || 0) + " of " + fmt.format(health.capacity || 0) + " exact-review slots open";
+  const backlog = fmt.format(queue?.pending || 0) + " total Â· " + fmt.format(queue?.ready_pending || 0) + " ready Â· " + fmt.format(queue?.admissible_pending || 0) + " admissible";
   const threshold = "stalled after " + elapsed((health.stalled_after_seconds || 0) * 1000);
-  target.innerHTML = '<div class="exact-handoff"><div class="exact-handoff-head"><div class="exact-handoff-title"><strong>Queue handoff health</strong><span>' + esc(health.message || "Queue phase telemetry") + '</span></div><span class="health-badge ' + esc(status) + '">' + esc(status) + '</span></div><div class="handoff-phases">' + phases + '</div><div class="handoff-foot"><span>' + esc(slots) + '</span><span>' + esc(threshold) + '</span></div></div>';
+  target.innerHTML = '<div class="exact-handoff"><div class="exact-handoff-head"><div class="exact-handoff-title"><strong>Exact-review handoff</strong><span>' + esc(health.message || "Queue phase telemetry") + '</span></div><div class="exact-handoff-badges"><span class="health-badge ' + esc(status) + '">' + esc(status) + '</span><span class="health-badge ' + esc(pressureStatus) + '">pressure ' + esc(pressureStatus) + '</span></div></div><div class="handoff-phases">' + phases + '</div><div class="handoff-foot"><span>' + esc(slots) + '</span><span>' + esc(backlog) + '</span><span>' + esc(threshold) + '</span></div></div>';
 }
 function renderWorkers(rows) {
   workerIndex = new Map(rows.map(worker => [String(worker.id), worker]));

@@ -503,7 +503,10 @@ test("dashboard status reads the exact-review handoff model from the durable que
   });
 
   assert.ok(status);
+  assert.match(status.generated_at, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(status.pending, 2);
+  assert.equal(status.ready_pending, 1);
+  assert.equal(status.admissible_pending, 1);
   assert.equal(status.dispatching, 0);
   assert.equal(status.leased, 2);
   assert.equal(status.handoff_health.status, "healthy");
@@ -532,6 +535,8 @@ test("dashboard status reads the exact-review handoff model from the durable que
   );
   assert.equal(typeof status.lanes.review.oldest_pending_at, "string");
   assert.equal(typeof status.lanes.review.next_attempt_at, "string");
+  assert.equal(status.pressure.status, "idle");
+  assert.equal(status.pressure.reason, "capacity_available");
   assert.equal(await exactReviewQueueStatusSnapshot({}), null);
 });
 
@@ -5298,6 +5303,9 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
       reconcilers: { running: 1, waiting: 0 },
     },
     exact_review_queue: {
+      pending: 4,
+      ready_pending: 3,
+      admissible_pending: 2,
       lanes: {
         review: {
           pending: 4,
@@ -5321,6 +5329,15 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
           available_slots: 3,
           oldest_pending_age_seconds: 30,
         },
+      },
+      pressure: {
+        status: "congested",
+        reason: "capacity_full_with_backlog",
+        capacity: 28,
+        active: 28,
+        pending: 4,
+        ready_pending: 3,
+        admissible_pending: 2,
       },
       handoff_health: {
         status: "healthy",
@@ -5432,6 +5449,8 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
   assert.match(elementFor("exact-review-handoff").innerHTML, /Dispatching/);
   assert.match(elementFor("exact-review-handoff").innerHTML, /2 of 28 exact-review slots open/);
   assert.match(elementFor("exact-review-handoff").innerHTML, /health-badge healthy/);
+  assert.match(elementFor("exact-review-handoff").innerHTML, /pressure congested/);
+  assert.match(elementFor("exact-review-handoff").innerHTML, /4 total Â· 3 ready Â· 2 admissible/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /Review admission/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /52 review admission slots open/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /Result publication/);
@@ -5445,6 +5464,7 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
 
   status.recent.apply_health.items = [];
   status.exact_review_queue.handoff_health.status = "stalled";
+  status.exact_review_queue.pressure.status = "saturated";
   status.exact_review_queue.handoff_health.message =
     "A dispatched review has not been claimed within the expected handoff window.";
   context.renderDashboard(status, "");
@@ -5452,6 +5472,7 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
   assert.equal(elementFor("hero-dot").className, "hero-dot red");
   assert.match(elementFor("hero-headline").textContent, /^Needs attention/);
   assert.match(elementFor("exact-review-handoff").innerHTML, /health-badge stalled/);
+  assert.match(elementFor("exact-review-handoff").innerHTML, /pressure saturated/);
 
   Object.assign(status, { exact_review_queue: null });
   status.diagnostics.exact_review_queue_error = "exact-review queue timed out";
