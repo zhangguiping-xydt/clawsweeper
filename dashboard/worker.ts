@@ -1050,13 +1050,17 @@ export class ExactReviewQueue {
         exactReviewHeartbeatGraceMs(this.env),
       );
       if (changed) await this.recordPressureHistory(state, now);
+      const pressureHistory = exactReviewQueuePressureHistory(
+        [...(await this.readPressureHistory(now)), exactReviewQueuePressurePoint(state, now)],
+        now,
+      );
       return json({
         ...stats,
         lanes: {
           ...stats.lanes,
           publication: { ...stats.lanes.publication, completed_total: completedTotal },
         },
-        pressure_history: await this.readPressureHistory(now),
+        pressure_history: pressureHistory,
         delivery_receipts: this.deliveryReceiptCountSync(),
         storage_schema_version: EXACT_REVIEW_QUEUE_STORAGE_SCHEMA_VERSION,
         legacy_rollback_available:
