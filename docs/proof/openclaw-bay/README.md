@@ -67,9 +67,9 @@ crabbox run \
 
 ## Provenance and privacy
 
-- implementation source: working-tree patch `ec0f64c822983d6b630602c7183578a312127a88` based on `ecc6d03d1ec73267d434cb1905cfc216c78fcd70`
+- implementation source: commit `0917b677419b1dbc646266d7cab9a3e8a733195d`
 - provider: Crabbox `local-container`
-- lease: `cbx_e42103e2f43c` (`coral-barnacle`)
+- lease: `cbx_1bfb66a4f757` (`silver-crab`)
 - image: `mcr.microsoft.com/playwright:v1.60.0-noble`
 - fixture SHA-256:
   `F766EE78A4E8E4F41EA9F2F64C9C85DFE3D04D7962B647007F073F40AF94ADA5`
