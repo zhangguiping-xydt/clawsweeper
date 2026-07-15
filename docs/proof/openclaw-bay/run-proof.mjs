@@ -443,13 +443,18 @@ try {
     { text: timingSummary },
   );
   const pressurePanel = await page.locator("#pressure-panel").innerText();
+  const pressurePointTitles = await page
+    .locator("#pressure-chart .pressure-point title")
+    .allTextContents();
   assertProof(
-    "handoff pressure shows an observed three-hour trend without browser polling",
+    "handoff pressure is compact and exposes exact series values on hover",
     /rising/i.test(pressurePanel) &&
       /405/.test(pressurePanel) &&
       (await page.locator("#pressure-chart .pressure-pending").count()) === 1 &&
-      (await page.locator("#pressure-chart .pressure-leased").count()) === 1,
-    { text: pressurePanel },
+      (await page.locator("#pressure-chart .pressure-leased").count()) === 1 &&
+      pressurePointTitles.some((title) => /waiting to admit/i.test(title)) &&
+      pressurePointTitles.some((title) => /review leases/i.test(title)),
+    { text: pressurePanel, hover_titles: pressurePointTitles },
   );
   await capture(
     "01-initial-diagnostics",
