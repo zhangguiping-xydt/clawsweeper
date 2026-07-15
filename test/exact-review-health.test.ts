@@ -264,3 +264,42 @@ test("exact-review pressure preserves non-dispatchable and unknown states", () =
     },
   );
 });
+
+test("exact-review pressure reports an inactive dispatcher before available capacity", () => {
+  const base = {
+    pending: 5,
+    readyPending: 5,
+    admissiblePending: 5,
+    dispatching: 0,
+    leased: 0,
+    capacity: 64,
+    handoffStatus: "degraded",
+  };
+
+  for (const dispatcherState of ["paused", "blocked"]) {
+    assert.deepEqual(summarizeExactReviewPressure({ ...base, dispatcherState }), {
+      status: "unknown",
+      reason: "dispatcher_inactive",
+      capacity: 64,
+      active: 0,
+      pending: 5,
+      ready_pending: 5,
+      admissible_pending: 5,
+    });
+  }
+});
+
+test("exact-review pressure keeps an unknown dispatcher unknown at full capacity", () => {
+  assert.equal(
+    summarizeExactReviewPressure({
+      pending: 64,
+      readyPending: 64,
+      admissiblePending: 64,
+      dispatching: 4,
+      leased: 60,
+      capacity: 64,
+      handoffStatus: "healthy",
+    }).reason,
+    "dispatcher_inactive",
+  );
+});

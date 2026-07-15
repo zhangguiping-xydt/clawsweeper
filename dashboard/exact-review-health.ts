@@ -212,6 +212,9 @@ export function summarizeExactReviewPressure({
   };
 
   if (safeCapacity < 1) return { status: "unknown", reason: "capacity_unavailable", ...common };
+  if (safePending > 0 && ["paused", "blocked"].includes(String(dispatcherState || ""))) {
+    return { status: "unknown", reason: "dispatcher_inactive", ...common };
+  }
   if (safeReadyPending < 1) return { status: "idle", reason: "no_ready_backlog", ...common };
   if (safeAdmissiblePending < 1) {
     return { status: "idle", reason: "no_admissible_backlog", ...common };

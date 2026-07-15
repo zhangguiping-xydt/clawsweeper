@@ -919,11 +919,12 @@ test("OpenClaw Bay is an unlisted, hardened demo route", async () => {
   assert.match(pressureElements["pressure-chart"].innerHTML, /after two observations/);
   assert.doesNotMatch(pressureElements["pressure-chart"].innerHTML, /pressure-pending/);
   new Script(
-    'queue={pending:8,pressure_history:[{observed_at:"2026-07-14T11:55:00Z",pending:3,leased:3},{observed_at:"2026-07-14T12:00:00Z",pending:8,leased:8}]};updatePressureTrend(queue);',
+    'queue={generated_at:"2026-07-14T12:00:00Z",pending:8,pressure_history:[{observed_at:"2026-07-14T11:55:00Z",pending:3,leased:3},{observed_at:"2026-07-14T12:00:00Z",pending:8,leased:8}]};updatePressureTrend(queue);',
   ).runInContext(pressureContext);
   assert.equal(pressureClasses.has("collecting"), false);
   assert.match(pressureElements["pressure-chart"].innerHTML, /pressure-overlap-point/);
   assert.match(pressureElements["pressure-chart"].innerHTML, /waiting to admit; .*review leases/);
+  assert.match(pressureElements["pressure-chart"].innerHTML, /cx="270\.3"/);
   assert.doesNotMatch(body, /function laneTimingHtml/);
   assert.doesNotMatch(body, /lane-average/);
   assert.doesNotMatch(body, /AVG WAIT|AVG TIME|AVG RUN/);
