@@ -863,15 +863,19 @@ test("OpenClaw Bay is an unlisted, hardened demo route", async () => {
   assert.match(body, /Hover a point for values/);
   assert.match(body, /Review handoff pressure · last 3 hours/);
   assert.match(body, /function updatePressureTrend/);
+  assert.match(body, /if\(!queue\)\{showPressureUnavailable\(\);return;\}/);
+  assert.match(body, /function showPressureUnavailable/);
+  assert.match(body, /hover\.textContent="Hover a point for values"/);
   assert.match(body, /pressure_history/);
   assert.match(body, /pressure-point/);
   const pressureScript = [...body.matchAll(/<script>\n([\s\S]*?)\n<\/script>/g)].at(-1)?.[1];
   assert.ok(pressureScript);
   const pressureStart = pressureScript.indexOf("function updatePressureTrend");
-  const pressureEnd = pressureScript.indexOf("function esc", pressureStart);
+  const pressureEnd = pressureScript.indexOf("function safeUrl", pressureStart);
   assert.ok(pressureStart > 0 && pressureEnd > pressureStart);
   const pressureClasses = new Set<string>();
   const pressureAttributes = new Map<string, string>();
+  const pressureHover = { textContent: "Hover a point for values" };
   const pressureElements = {
     "pressure-panel": {
       classList: {
@@ -889,6 +893,7 @@ test("OpenClaw Bay is an unlisted, hardened demo route", async () => {
   const pressureContext = createContext({
     document: {
       getElementById: (id: keyof typeof pressureElements) => pressureElements[id],
+      querySelector: (selector: string) => (selector === ".pressure-hover" ? pressureHover : null),
     },
     queue: {
       pending: 9,
@@ -918,6 +923,16 @@ test("OpenClaw Bay is an unlisted, hardened demo route", async () => {
   );
   assert.match(pressureElements["pressure-chart"].innerHTML, /after two observations/);
   assert.doesNotMatch(pressureElements["pressure-chart"].innerHTML, /pressure-pending/);
+  new Script("showPressureUnavailable();").runInContext(pressureContext);
+  assert.equal(pressureClasses.has("collecting"), true);
+  assert.equal(pressureElements["pressure-current"].textContent, "—");
+  assert.equal(pressureElements["pressure-summary"].textContent, "Queue telemetry unavailable");
+  assert.equal(pressureHover.textContent, "Queue telemetry unavailable");
+  assert.equal(
+    pressureAttributes.get("aria-label"),
+    "Review handoff queue telemetry is unavailable.",
+  );
+  assert.match(pressureElements["pressure-chart"].innerHTML, /Queue telemetry unavailable/);
   new Script(
     'queue={generated_at:"2026-07-14T12:00:00Z",pending:8,pressure_history:[{observed_at:"2026-07-14T11:55:00Z",pending:3,leased:3},{observed_at:"2026-07-14T12:00:00Z",pending:8,leased:8}]};updatePressureTrend(queue);',
   ).runInContext(pressureContext);
