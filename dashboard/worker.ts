@@ -1035,11 +1035,10 @@ export class ExactReviewQueue {
         else this.syncLegacyCompatibilitySync(current);
         return {
           state: current,
-          changed,
           completedTotal: this.publicationCompletedTotalSync(),
         };
       });
-      const { state, changed, completedTotal } = snapshot;
+      const { state, completedTotal } = snapshot;
       await this.scheduleNext(state, now);
       const stats = exactReviewQueueStats(
         state,
@@ -1052,7 +1051,10 @@ export class ExactReviewQueue {
         exactReviewPublicationDispatchLeaseMs(this.env),
         exactReviewHeartbeatGraceMs(this.env),
       );
-      if (changed) await this.recordPressureHistory(state, now);
+      // The scheduled status snapshot is the pressure sampler. Persist its bucket even
+      // when lease reclamation leaves the queue unchanged, so the Bay chart represents
+      // sustained backlog rather than only queue mutations.
+      await this.recordPressureHistory(state, now);
       const pressureHistory = exactReviewQueuePressureHistory(
         [...(await this.readPressureHistory(now)), exactReviewQueuePressurePoint(state, now)],
         now,
@@ -1640,6 +1642,7 @@ export class ExactReviewQueue {
         [...current.filter((entry) => entry.observed_at !== point.observed_at), point],
         observedAt,
       );
+      if (exactReviewQueuePressureHistoryEqual(current, next)) return;
       await this.storage.put(EXACT_REVIEW_QUEUE_PRESSURE_HISTORY_KEY, next);
     } catch (error) {
       console.warn("exact-review queue pressure history write failed", error);
@@ -3680,6 +3683,22 @@ function exactReviewQueuePressureHistory(value: unknown, now = Date.now()) {
   return [...byTimestamp.values()]
     .sort((left, right) => Date.parse(left.observed_at) - Date.parse(right.observed_at))
     .slice(-EXACT_REVIEW_QUEUE_PRESSURE_POINT_LIMIT);
+}
+
+function exactReviewQueuePressureHistoryEqual(
+  left: ExactReviewQueuePressurePoint[],
+  right: ExactReviewQueuePressurePoint[],
+) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (point, index) =>
+        point.observed_at === right[index]?.observed_at &&
+        point.pending === right[index]?.pending &&
+        point.dispatching === right[index]?.dispatching &&
+        point.leased === right[index]?.leased,
+    )
+  );
 }
 
 export function exactReviewQueueNextWakeAt(

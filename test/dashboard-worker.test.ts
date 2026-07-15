@@ -580,6 +580,36 @@ test("exact-review pressure history replaces a five-minute bucket and stays boun
   }
 });
 
+test("exact-review pressure history persists scheduled buckets without queue mutations", async () => {
+  const originalNow = Date.now;
+  let now = Date.parse("2026-07-14T10:00:12.000Z");
+  Date.now = () => now;
+  try {
+    const storage = new MemoryDurableStorage();
+    const queue = new ExactReviewQueue({ storage }, {});
+    const env = { EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue) };
+    const historyKey = "exact-review-queue-pressure-history:v2";
+    await queue.fetch(buildExactReviewQueueRequest("pressure-scheduled", 605, "opened"));
+
+    const initialWrites = storage.putCount(historyKey);
+    const initialStatus = await exactReviewQueueStatusSnapshot(env);
+    assert.equal(initialStatus?.pressure_history.length, 1);
+    assert.equal(storage.putCount(historyKey), initialWrites);
+
+    now += 5 * 60_000;
+    const scheduledStatus = await exactReviewQueueStatusSnapshot(env);
+    assert.equal(scheduledStatus?.pressure_history.length, 2);
+    assert.equal(storage.putCount(historyKey), initialWrites + 1);
+    assert.deepEqual(await storage.get(historyKey), scheduledStatus?.pressure_history);
+
+    now += 60_000;
+    await exactReviewQueueStatusSnapshot(env);
+    assert.equal(storage.putCount(historyKey), initialWrites + 1);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("exact-review queue keeps its core mutation available when pressure history fails", async () => {
   const storage = new MemoryDurableStorage();
   const queue = new ExactReviewQueue({ storage }, {});
