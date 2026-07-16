@@ -5758,7 +5758,7 @@ test("dashboard hero treats apply and exact-review handoff health as attention",
   assert.match(elementFor("exact-review-handoff").innerHTML, /2 of 28 exact-review slots open/);
   assert.match(elementFor("exact-review-handoff").innerHTML, /health-badge healthy/);
   assert.match(elementFor("exact-review-handoff").innerHTML, /pressure congested/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /4 total Â· 3 ready Â· 2 admissible/);
+  assert.match(elementFor("exact-review-handoff").innerHTML, /4 total · 3 ready · 2 admissible/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /Review admission/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /52 review admission slots open/);
   assert.match(elementFor("exact-review-lanes").innerHTML, /Result publication/);
