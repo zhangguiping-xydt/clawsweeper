@@ -465,7 +465,7 @@ test("exact-review queue admits and wakes up to 24 publishers", () => {
 
 test("dashboard status reads the exact-review handoff model from the durable queue", async () => {
   const storage = new MemoryDurableStorage();
-  const queue = new ExactReviewQueue({ storage }, {});
+  const queue = new ExactReviewQueue({ storage }, { EXACT_REVIEW_DISPATCH_DEBOUNCE_MS: "0" });
   await queue.fetch(buildExactReviewQueueRequest("handoff-status", 597, "opened"));
   await queue.fetch(buildExactReviewQueueRequest("backoff-status", 598, "opened"));
   await queue.fetch(buildExactReviewQueueRequest("leased-review-status", 600, "opened"));
@@ -520,7 +520,7 @@ test("dashboard status reads the exact-review handoff model from the durable que
       available_slots: status.lanes.review.available_slots,
       capacity: status.lanes.review.capacity,
     },
-    { pending: 2, ready: 0, backoff: 2, active: 1, available_slots: 63, capacity: 64 },
+    { pending: 2, ready: 1, backoff: 1, active: 1, available_slots: 63, capacity: 64 },
   );
   assert.deepEqual(
     {
@@ -662,7 +662,10 @@ test("dashboard status excludes retry-delayed exact reviews from dispatchable ba
 
 test("dashboard status excludes ready reviews blocked by a target exact-review cap", async () => {
   const storage = new MemoryDurableStorage();
-  const queue = new ExactReviewQueue({ storage }, { EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1" });
+  const queue = new ExactReviewQueue(
+    { storage },
+    { EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1", EXACT_REVIEW_DISPATCH_DEBOUNCE_MS: "0" },
+  );
   await queue.fetch(
     buildExactReviewQueueRequest("target-cap-status", 599, "opened", "issue", "openclaw/openclaw"),
   );
@@ -690,6 +693,7 @@ test("dashboard status reports saturated exact-review pressure at full capacity"
     {
       EXACT_REVIEW_QUEUE_MAX_CONCURRENT: "1",
       EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1",
+      EXACT_REVIEW_DISPATCH_DEBOUNCE_MS: "0",
     },
   );
   await queue.fetch(
@@ -728,6 +732,7 @@ test("dashboard pressure excludes artifact publishers from review capacity", asy
     {
       EXACT_REVIEW_QUEUE_MAX_CONCURRENT: "1",
       EXACT_REVIEW_TARGET_MAX_CONCURRENT: "1",
+      EXACT_REVIEW_DISPATCH_DEBOUNCE_MS: "0",
     },
   );
   await queue.fetch(

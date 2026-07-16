@@ -1631,6 +1631,8 @@ export class ExactReviewQueue {
         WHERE singleton_id = 1`,
       count,
     );
+  }
+
   private async recordPressureHistory(state: ExactReviewQueueState, observedAt: number) {
     try {
       const current = exactReviewQueuePressureHistory(
@@ -3580,6 +3582,7 @@ function exactReviewQueueStats(
   return {
     generated_at: handoffHealth.observed_at,
     pending: handoffHealth.phases.pending.count,
+    shed_since_reset: exactReviewShedSinceReset(state),
     ready_pending: readyPending,
     admissible_pending: admissiblePending,
     dispatching: handoffHealth.phases.dispatching.count,
