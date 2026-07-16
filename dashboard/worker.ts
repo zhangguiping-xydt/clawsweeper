@@ -3565,6 +3565,7 @@ function exactReviewQueueStats(
     now,
     Number.MAX_SAFE_INTEGER,
     targetCapacity,
+    publicationCapacity,
   ).filter((item) => !exactReviewQueueIsPublication(item)).length;
   const pressure = summarizeExactReviewPressure({
     pending: reviewHandoffHealth.phases.pending.count,

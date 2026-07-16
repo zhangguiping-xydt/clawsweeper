@@ -539,9 +539,9 @@ test("dashboard status reads the exact-review handoff model from the durable que
   assert.equal(status.pressure.reason, "capacity_available");
   assert.equal(status.pressure_history.length, 1);
   assert.match(status.pressure_history[0].observed_at, /^\d{4}-\d{2}-\d{2}T/);
-  assert.equal(status.pressure_history[0].pending, 1);
+  assert.equal(status.pressure_history[0].pending, 2);
   assert.equal(status.pressure_history[0].dispatching, 0);
-  assert.equal(status.pressure_history[0].leased, 0);
+  assert.equal(status.pressure_history[0].leased, 1);
   assert.equal(await exactReviewQueueStatusSnapshot({}), null);
 });
 
